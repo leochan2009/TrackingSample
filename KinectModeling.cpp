@@ -25,6 +25,8 @@
 #include "igtlVideoMessage.h"
 #include "igtlTransformMessage.h"
 #include "igtlMultiThreader.h"
+#include "igtlConditionVariable.h"
+
 // VTK includes
 #include <vtkNew.h>
 #include <vtkCallbackCommand.h>
@@ -43,6 +45,10 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkRenderer.h>
 #include <vtkCamera.h>
+#include <vtkInteractorStyle.h>
+#include <vtkInteractorStyleSwitch.h>
+#include <vtkInteractorStyleTrackballCamera.h>
+#include <vtkObjectFactory.h>
 
 uint8_t *RGBFrame;
 uint8_t *DepthFrame;
@@ -56,6 +62,9 @@ vtkSmartPointer<vtkActor> actor;
 vtkSmartPointer<vtkRenderer> renderer;
 vtkSmartPointer<vtkRenderWindow> renderWindow;
 vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
+bool interactionActive;
+igtl::ConditionVariable::Pointer conditionVar;
+igtl::SimpleMutexLock * localMutex;
 
 void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned char* bufColor, int depth_width_, int depth_height_) // now it is fixed to 512, 424
 {
@@ -136,7 +145,7 @@ void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned 
 
 int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& header)
 {
-  std::cerr << "Receiving TRANSFORM data type." << std::endl;
+  std::cerr << "Receiving TRANSFORM data type. " << header->GetDeviceName()<< std::endl;
   
   // Create a message buffer to receive transform data
   igtl::VideoMessage::Pointer videoMessage = igtl::VideoMessage::New();
@@ -178,7 +187,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.176.120";
+  char*  hostname = "10.22.178.28";
   int    port     = 18944;
   
   //------------------------------------------------------------
@@ -235,9 +244,6 @@ void ConnectionThread()
     headerMsg->GetTimeStamp(ts);
     ts->GetTimeStamp(&sec, &nanosec);
     
-    std::cerr << "Time stamp: "
-    << sec << "." << std::setw(9) << std::setfill('0')
-    << nanosec << std::endl;
     
     // Check data type and receive data body
     if (strcmp(headerMsg->GetDeviceType(), "ColoredDepth") == 0)
@@ -245,6 +251,12 @@ void ConnectionThread()
       ReceiveVideoStream(socket, headerMsg);
       if (DepthFrame && RGBFrame && DepthIndex)
       {
+        localMutex->Lock();
+        while(interactionActive)
+        {
+          conditionVar->Wait(localMutex);
+        }
+        localMutex->Unlock();
         ConvertDepthToPoints((unsigned char*)DepthFrame,DepthIndex, RGBFrame, 512, 424);
         delete [] DepthFrame;
         DepthFrame = NULL;
@@ -269,8 +281,49 @@ void ConnectionThread()
   socket->CloseSocket();
 }
 typedef pcl::PointXYZ PointT;
+class customMouseInteractorStyle : public vtkInteractorStyleTrackballCamera
+{
+public:
+  static customMouseInteractorStyle* New();
+  vtkTypeMacro(customMouseInteractorStyle, vtkInteractorStyleTrackballCamera);
+  virtual void OnLeftButtonDown()
+  {
+    std::cout << "Pressed left mouse button." << std::endl;
+    // Forward events
+    vtkInteractorStyleTrackballCamera::OnLeftButtonDown();
+    interactionActive = true;
+  }
+  
+  virtual void OnLeftButtonUp()
+  {
+    std::cout << "Release left mouse button." << std::endl;
+    // Forward events
+    vtkInteractorStyleTrackballCamera::OnLeftButtonUp();
+    interactionActive = false;
+    conditionVar->Signal();
+  }
+  
+  virtual void OnMiddleButtonDown()
+  {
+    std::cout << "Pressed middle mouse button." << std::endl;
+    // Forward events
+    vtkInteractorStyleTrackballCamera::OnMiddleButtonDown();
+  }
+  
+  virtual void OnRightButtonDown()
+  {
+    std::cout << "Pressed right mouse button." << std::endl;
+    // Forward events
+    vtkInteractorStyleTrackballCamera::OnRightButtonDown();
+  }
+};
+vtkStandardNewMacro(customMouseInteractorStyle);
+
 int main(int argc, char* argv[])
 {
+  conditionVar = igtl::ConditionVariable::New();
+  localMutex = igtl::SimpleMutexLock::New();
+  interactionActive = false;
   // Create a mapper
   mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
   mapper->SetInputData(polyData);
@@ -324,11 +377,23 @@ int main(int argc, char* argv[])
   renderWindow->SetSize(1000, 600);
   renderWindow->Render();
   threadViewer->SpawnThread((igtl::ThreadFunctionType) &ConnectionThread, NULL);
+  
+  vtkInteractorObserver *currentStyle =
+  renderWindowInteractor->GetInteractorStyle();
+  std::cout << "currentStyle class name: " << currentStyle->GetClassName() << std::endl;
+  
+  vtkInteractorStyleSwitch *iss = vtkInteractorStyleSwitch::SafeDownCast(currentStyle);
+  vtkInteractorObserver *actualStyle = iss->GetCurrentStyle();
+  std::cout << "actualStyle class name: " <<
+  actualStyle->GetClassName() << std::endl;
+  vtkSmartPointer<customMouseInteractorStyle> style = vtkSmartPointer<customMouseInteractorStyle>::New();
+  renderWindowInteractor->SetInteractorStyle( style );
+  std::cout << "currentStyle class name: " << renderWindowInteractor->GetInteractorStyle()->GetClassName() << std::endl;
+  
   renderWindowInteractor->Start();
   while(1)
   {
     igtl::Sleep(1000);
   }
 }
-
 

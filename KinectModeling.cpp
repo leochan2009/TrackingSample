@@ -50,6 +50,9 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkObjectFactory.h>
 
+
+// Local include
+#include "CupModeling.hpp"
 uint8_t *RGBFrame;
 uint8_t *DepthFrame;
 uint8_t *DepthIndex;
@@ -65,7 +68,7 @@ vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
 bool interactionActive;
 igtl::ConditionVariable::Pointer conditionVar;
 igtl::SimpleMutexLock * localMutex;
-
+int frameNum = 0;
 void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned char* bufColor, int depth_width_, int depth_height_) // now it is fixed to 512, 424
 {
   ;//(depth_width_*depth_height_,vtkVector<float, 3>());
@@ -258,6 +261,9 @@ void ConnectionThread()
         }
         localMutex->Unlock();
         ConvertDepthToPoints((unsigned char*)DepthFrame,DepthIndex, RGBFrame, 512, 424);
+        frameNum++;
+        //SegmentCylindarObject(polyData, frameNum);
+        TrackCylindarObject(polyData);
         delete [] DepthFrame;
         DepthFrame = NULL;
         delete [] RGBFrame;
@@ -321,6 +327,7 @@ vtkStandardNewMacro(customMouseInteractorStyle);
 
 int main(int argc, char* argv[])
 {
+  trackingInitialization();
   conditionVar = igtl::ConditionVariable::New();
   localMutex = igtl::SimpleMutexLock::New();
   interactionActive = false;
@@ -369,15 +376,13 @@ int main(int argc, char* argv[])
   
   pcl::PCDReader reader;
   pcl::PointCloud<PointT>::Ptr cloud (new pcl::PointCloud<PointT>);
-  reader.read ("/Users/longquanchen/Desktop/Github/TrackingSample/table_scene_mug_stereo_textured.pcd", *cloud);
+  reader.read ("/Users/longquanchen/Desktop/Github/TrackingSample/build/Debug/table_scene_mug_stereo_textured_cylinder.pcd", *cloud);
   std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
   pcl::io::pointCloudTovtkPolyData<PointT>(*cloud, polyData.GetPointer());
   mapper->SetInputData(polyData);
   // Render an image (lights and cameras are created automatically)
   renderWindow->SetSize(1000, 600);
   renderWindow->Render();
-  threadViewer->SpawnThread((igtl::ThreadFunctionType) &ConnectionThread, NULL);
-  
   vtkInteractorObserver *currentStyle =
   renderWindowInteractor->GetInteractorStyle();
   std::cout << "currentStyle class name: " << currentStyle->GetClassName() << std::endl;
@@ -389,8 +394,9 @@ int main(int argc, char* argv[])
   vtkSmartPointer<customMouseInteractorStyle> style = vtkSmartPointer<customMouseInteractorStyle>::New();
   renderWindowInteractor->SetInteractorStyle( style );
   std::cout << "currentStyle class name: " << renderWindowInteractor->GetInteractorStyle()->GetClassName() << std::endl;
-  
+  threadViewer->SpawnThread((igtl::ThreadFunctionType) &ConnectionThread, NULL);
   renderWindowInteractor->Start();
+
   while(1)
   {
     igtl::Sleep(1000);

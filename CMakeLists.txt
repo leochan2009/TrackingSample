@@ -23,6 +23,6 @@ message(${CMAKE_PREFIX_PATH})
 find_package(OpenIGTLink REQUIRED)
 include(${OpenIGTLink_USE_FILE})
 FIND_LIBRARY(OpenIGTLinkLib OpenIGTLink /Users/longquanchen/Desktop/Github/Slicer-unixBuild/OpenIGTLink-build/bin/Debug)
-add_executable (KinectModeling KinectModeling.cpp)
+add_executable (KinectModeling KinectModeling.cpp CupModeling.cpp)
 target_link_libraries (KinectModeling ${PCL_LIBRARIES} ${OpenIGTLinkLib} ${VTK_LIBRARIES})
 

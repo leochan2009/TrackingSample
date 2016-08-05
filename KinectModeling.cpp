@@ -190,7 +190,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.178.28";
+  char*  hostname = "10.22.178.70";
   int    port     = 18944;
   
   //------------------------------------------------------------
@@ -263,7 +263,8 @@ void ConnectionThread()
         ConvertDepthToPoints((unsigned char*)DepthFrame,DepthIndex, RGBFrame, 512, 424);
         frameNum++;
         //SegmentCylindarObject(polyData, frameNum);
-        TrackCylindarObject(polyData);
+        if (frameNum >6)
+          TrackCylindarObject(polyData);
         delete [] DepthFrame;
         DepthFrame = NULL;
         delete [] RGBFrame;
@@ -286,7 +287,7 @@ void ConnectionThread()
   
   socket->CloseSocket();
 }
-typedef pcl::PointXYZ PointT;
+
 class customMouseInteractorStyle : public vtkInteractorStyleTrackballCamera
 {
 public:
@@ -327,7 +328,8 @@ vtkStandardNewMacro(customMouseInteractorStyle);
 
 int main(int argc, char* argv[])
 {
-  trackingInitialization();
+  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/build/Debug/table_scene_mug_stereo_textured_cylinder_SingleFrame.pcd";
+  trackingInitialization(targetFileName);
   conditionVar = igtl::ConditionVariable::New();
   localMutex = igtl::SimpleMutexLock::New();
   interactionActive = false;
@@ -375,10 +377,11 @@ int main(int argc, char* argv[])
   polyData = vtkSmartPointer<vtkPolyData>::New();
   
   pcl::PCDReader reader;
-  pcl::PointCloud<PointT>::Ptr cloud (new pcl::PointCloud<PointT>);
-  reader.read ("/Users/longquanchen/Desktop/Github/TrackingSample/build/Debug/table_scene_mug_stereo_textured_cylinder.pcd", *cloud);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
+  
+  reader.read (targetFileName, *cloud);
   std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
-  pcl::io::pointCloudTovtkPolyData<PointT>(*cloud, polyData.GetPointer());
+  pcl::io::pointCloudTovtkPolyData<pcl::PointXYZ>(*cloud, polyData.GetPointer());
   mapper->SetInputData(polyData);
   // Render an image (lights and cameras are created automatically)
   renderWindow->SetSize(1000, 600);

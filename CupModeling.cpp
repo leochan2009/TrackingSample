@@ -21,14 +21,14 @@
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/io/vtk_lib_io.h>
 #include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
+
 #include <pcl/console/parse.h>
 #include <pcl/common/time.h>
 #include <pcl/common/centroid.h>
 
 #include <pcl/visualization/cloud_viewer.h>
 #include <pcl/visualization/pcl_visualizer.h>
-
+#include <pcl/point_types.h>
 #include <pcl/search/pcl_search.h>
 #include <pcl/common/transforms.h>
 #include <pcl/tracking/tracking.h>
@@ -41,19 +41,18 @@
 #include <pcl/tracking/approx_nearest_pair_point_cloud_coherence.h>
 #include <pcl/tracking/nearest_pair_point_cloud_coherence.h>
 
-typedef pcl::PointXYZRGB PointT;
 pcl::PointCloud<PointT>::Ptr cloud_cylinder_total (new pcl::PointCloud<PointT> ());
 vtkSmartPointer<vtkVertexGlyphFilter> vertexFilter2(vtkSmartPointer<vtkVertexGlyphFilter>::New());
 vtkSmartPointer<vtkUnsignedCharArray> colorsProcessed(vtkSmartPointer<vtkUnsignedCharArray>::New());
 vtkSmartPointer<vtkPoints>  cloudProcessed(vtkSmartPointer<vtkPoints>::New());
 
-typedef pcl::PointCloud<pcl::PointXYZRGB> Cloud;
+typedef pcl::PointCloud<PointT> Cloud;
 typedef Cloud::Ptr CloudPtr;
 typedef Cloud::ConstPtr CloudConstPtr;
-typedef pcl::PointXYZRGB RefPointType;
+typedef PointT RefPointType;
 typedef pcl::tracking::ParticleXYZRPY ParticleT;
 typedef pcl::tracking::ParticleFilterTracker<RefPointType, ParticleT> ParticleFilter;
-typedef pcl::PointXYZRGB RefPointType;
+typedef PointT RefPointType;
 pcl::PointCloud<PointT>::Ptr target_cloud (new pcl::PointCloud<PointT>);
 CloudPtr cloud_pass_;
 CloudPtr cloud_pass_downsampled_;
@@ -83,8 +82,10 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   // Build a passthrough filter to remove spurious NaNs
   pass.setInputCloud (cloud);
   pass.setFilterFieldName ("z");
-  pass.setFilterLimits (1200, 1500);
+  pass.setFilterLimits (1350, 1550);
+  pass.setKeepOrganized (false);
   pass.filter (*cloud_filtered);
+  
   std::cerr << "PointCloud after filtering has: " << cloud_filtered->points.size () << " data points." << std::endl;
   
   // Estimate point normals
@@ -128,21 +129,20 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   seg.setNormalDistanceWeight (0.1);
   seg.setMaxIterations (10000);
   seg.setDistanceThreshold (5);
-  seg.setRadiusLimits (0, 100);
-  seg.setInputCloud (cloud_filtered2);
-  seg.setInputNormals (cloud_normals2);
+  seg.setRadiusLimits (50, 100);
+  seg.setInputCloud (cloud_filtered);
+  seg.setInputNormals (cloud_normals);
   
   // Obtain the cylinder inliers and coefficients
   seg.segment (*inliers_cylinder, *coefficients_cylinder);
   std::cerr << "Cylinder coefficients: " << *coefficients_cylinder << std::endl;
   
   // Write the cylinder inliers to disk
-  extract.setInputCloud (cloud_filtered2);
+  extract.setInputCloud (cloud_filtered);
   extract.setIndices (inliers_cylinder);
   extract.setNegative (false);
   pcl::PointCloud<PointT>::Ptr cloud_cylinder (new pcl::PointCloud<PointT> ());
   extract.filter (*cloud_cylinder);
-  cloud_cylinder_total->insert(cloud_cylinder_total->begin(),cloud_cylinder->begin(),cloud_cylinder->end());
   vtkSmartPointer<vtkPolyData> localPolyData = vtkSmartPointer<vtkPolyData>::New();
   pcl::io::pointCloudTovtkPolyData<PointT>(*cloud_cylinder, localPolyData.GetPointer());
   vtkSmartPointer<vtkPoints> ptsLocal = localPolyData->GetPoints();
@@ -153,12 +153,12 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   colorsProcessed->Reset();
   colorsProcessed->SetNumberOfComponents(3);
   colorsProcessed->SetName("Colors");
-  for(int index = 0; index<pts->GetNumberOfPoints();index++)
+  /*for(int index = 0; index<pts->GetNumberOfPoints();index++)
   {
     cloudProcessed->InsertNextPoint(pts->GetPoint(index)[0],pts->GetPoint(index)[1],pts->GetPoint(index)[2]);
     unsigned char color[3] = {colorData->GetTuple(index)[0], colorData->GetTuple(index)[1], colorData->GetTuple(index)[2]};
     colorsProcessed->InsertNextTupleValue(color);
-  }
+  }*/
   for(int index = 0; index<ptsLocal->GetNumberOfPoints();index++)
   {
     cloudProcessed->InsertNextPoint(ptsLocal->GetPoint(index)[0],ptsLocal->GetPoint(index)[1],ptsLocal->GetPoint(index)[2]);
@@ -174,38 +174,41 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
     std::cerr << "Can't find the cylindrical component." << std::endl;
   else
   {
-    if(frameNum<20)
+    if(frameNum>=19)
+      cloud_cylinder_total->insert(cloud_cylinder_total->begin(),cloud_cylinder->begin(),cloud_cylinder->end());
+    if(frameNum<20 && frameNum>=19)
     {
       std::cerr << "Saving the data to the vector" << std::endl;
+      writer.write ("table_scene_mug_stereo_textured_cylinder_SingleFrame.pcd", *cloud_cylinder, false);
     }
     else if(frameNum >=20 && frameNum<50)
     {
       std::cerr << "PointCloud representing the cylindrical component: " << cloud_cylinder->points.size () << " data points." << std::endl;
-      //writer.write ("table_scene_mug_stereo_textured_cylinder.pcd", *cloud_cylinder_total, false);
+      writer.write ("table_scene_mug_stereo_textured_cylinder.pcd", *cloud_cylinder_total, false);
     }
   }
 }
 
 void gridSampleApprox (const CloudConstPtr &cloud, Cloud &result, double leaf_size)
 {
-  pcl::ApproximateVoxelGrid<pcl::PointXYZRGB> grid;
+  pcl::ApproximateVoxelGrid<PointT> grid;
   grid.setLeafSize (static_cast<float> (leaf_size), static_cast<float> (leaf_size), static_cast<float> (leaf_size));
   grid.setInputCloud (cloud);
   grid.filter (result);
 }
 
-void trackingInitialization()
+void trackingInitialization(const std::string targetFileName)
 {
   pcl::PCDReader reader;
-  reader.read ("/Users/longquanchen/Desktop/Github/TrackingSample/build/Debug/table_scene_mug_stereo_textured_cylinder.pcd", *target_cloud);
+  reader.read (targetFileName, *target_cloud);
   std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
   //Set parameters
-  float downsampling_grid_size_ =  5;
+  float downsampling_grid_size_ =  0.5;
   
   std::vector<double> default_step_covariance = std::vector<double> (6, 0.015 * 0.015);
-  //default_step_covariance[0] *= 1000.0;
-  //default_step_covariance[1] *= 1000.0;
-  //default_step_covariance[2] *= 1000.0;
+  default_step_covariance[0] *= 10000.0;
+  default_step_covariance[1] *= 10000.0;
+  default_step_covariance[2] *= 10000.0;
   default_step_covariance[3] *= 40.0;
   default_step_covariance[4] *= 40.0;
   default_step_covariance[5] *= 40.0;
@@ -217,16 +220,16 @@ void trackingInitialization()
   (new pcl::tracking::KLDAdaptiveParticleFilterOMPTracker<RefPointType, ParticleT> (8));
   
   ParticleT bin_size;
-  bin_size.x = 1.0f;
-  bin_size.y = 1.0f;
-  bin_size.z = 1.0f;
+  bin_size.x = 100.0f;
+  bin_size.y = 100.0f;
+  bin_size.z = 100.0f;
   bin_size.roll = 0.1f;
   bin_size.pitch = 0.1f;
   bin_size.yaw = 0.1f;
   
   
   //Set all parameters for  KLDAdaptiveParticleFilterOMPTracker
-  tracker->setMaximumParticleNum (1000);
+  tracker->setMaximumParticleNum (200);
   tracker->setDelta (0.99);
   tracker->setEpsilon (0.2);
   tracker->setBinSize (bin_size);
@@ -237,9 +240,9 @@ void trackingInitialization()
   tracker_->setStepNoiseCovariance (default_step_covariance);
   tracker_->setInitialNoiseCovariance (initial_noise_covariance);
   tracker_->setInitialNoiseMean (default_initial_mean);
-  tracker_->setIterationNum (1);
-  tracker_->setParticleNum (600);
-  tracker_->setResampleLikelihoodThr(0.00);
+  tracker_->setIterationNum (10);
+  tracker_->setParticleNum (100);
+  tracker_->setResampleLikelihoodThr(0.2);
   tracker_->setUseNormal (false);
   
   
@@ -251,9 +254,9 @@ void trackingInitialization()
   = boost::shared_ptr<pcl::tracking::DistanceCoherence<RefPointType> > (new pcl::tracking::DistanceCoherence<RefPointType> ());
   coherence->addPointCoherence (distance_coherence);
   
-  boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (0.01));
+  boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (2));
   coherence->setSearchMethod (search);
-  coherence->setMaximumDistance (0.01);
+  coherence->setMaximumDistance (100);
   
   tracker_->setCloudCoherence (coherence);
   
@@ -266,10 +269,10 @@ void trackingInitialization()
   pcl::compute3DCentroid<RefPointType> (*target_cloud, c);
   trans.translation ().matrix () = Eigen::Vector3f (c[0], c[1], c[2]);
   pcl::transformPointCloud<RefPointType> (*target_cloud, *transed_ref, trans.inverse());
-  gridSampleApprox (transed_ref, *transed_ref_downsampled, downsampling_grid_size_);
+  //gridSampleApprox (transed_ref, *transed_ref_downsampled, downsampling_grid_size_);
   
   //set reference model and trans
-  tracker_->setReferenceCloud (transed_ref_downsampled);
+  tracker_->setReferenceCloud (transed_ref);
   tracker_->setTrans (trans);
   
 }
@@ -277,9 +280,9 @@ void trackingInitialization()
 //Filter along a specified dimension
 void filterPassThrough (const CloudConstPtr &cloud, Cloud &result)
 {
-  pcl::PassThrough<pcl::PointXYZRGB> pass;
+  pcl::PassThrough<PointT> pass;
   pass.setFilterFieldName ("z");
-  pass.setFilterLimits (1200.0, 1600.0);
+  pass.setFilterLimits (500.0, 1800.0);
   pass.setKeepOrganized (false);
   pass.setInputCloud (cloud);
   pass.filter (result);
@@ -299,7 +302,7 @@ drawResult ()
   for(int index = 0; index<result_cloud->size();index++)
   {
     cloudProcessed->InsertNextPoint(result_cloud->at(index).data[0],result_cloud->at(index).data[1],result_cloud->at(index).data[2]);
-    unsigned char color[3] = {0,0,255};
+    unsigned char color[3] = {0,0,255};//result_cloud->at(index).r,result_cloud->at(index).g,result_cloud->at(index).b};
     colorsProcessed->InsertNextTupleValue(color);
   }
   

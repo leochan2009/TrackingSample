@@ -18,6 +18,9 @@
 #include <vtkSmartPointer.h>
 #endif /* CupModeling_hpp */
 
+#include <pcl/point_types.h>
+typedef pcl::PointXYZRGB PointT;
+
 void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum);
 void TrackCylindarObject(vtkSmartPointer<vtkPolyData> polyData);
-void trackingInitialization();
+void trackingInitialization(const std::string targetFileName);

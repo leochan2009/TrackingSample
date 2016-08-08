@@ -256,7 +256,7 @@ void trackingInitialization(const std::string targetFileName)
   
   boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (2));
   coherence->setSearchMethod (search);
-  coherence->setMaximumDistance (100);
+  coherence->setMaximumDistance (20);
   
   tracker_->setCloudCoherence (coherence);
   
@@ -282,7 +282,7 @@ void filterPassThrough (const CloudConstPtr &cloud, Cloud &result)
 {
   pcl::PassThrough<PointT> pass;
   pass.setFilterFieldName ("z");
-  pass.setFilterLimits (500.0, 1800.0);
+  pass.setFilterLimits (1200.0, 3800.0);
   pass.setKeepOrganized (false);
   pass.setInputCloud (cloud);
   pass.filter (result);
@@ -308,13 +308,15 @@ drawResult ()
   
   ParticleFilter::PointCloudStatePtr particles = tracker_->getParticles ();
   //Set pointCloud with particle's points
-  for (size_t i = 0; i < particles->points.size (); i++)
+  if(particles)
   {
-    cloudProcessed->InsertNextPoint(particles->points[i].x,particles->points[i].y,particles->points[i].z);
-    unsigned char color[3] = {255,0,0};
-    colorsProcessed->InsertNextTupleValue(color);
+    for (size_t i = 0; i < particles->points.size (); i++)
+    {
+      cloudProcessed->InsertNextPoint(particles->points[i].x,particles->points[i].y,particles->points[i].z);
+      unsigned char color[3] = {255,0,0};
+      colorsProcessed->InsertNextTupleValue(color);
+    }
   }
-  
 }
 
 void TrackCylindarObject (vtkSmartPointer<vtkPolyData> polydata)

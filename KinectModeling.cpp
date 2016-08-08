@@ -26,6 +26,7 @@
 #include "igtlTransformMessage.h"
 #include "igtlMultiThreader.h"
 #include "igtlConditionVariable.h"
+#include "igtlTimeStamp.h"
 
 // VTK includes
 #include <vtkNew.h>
@@ -51,8 +52,18 @@
 #include <vtkObjectFactory.h>
 
 
+// H264 encoder include
+extern "C"
+{
+  #include "codec/api/svc/codec_api.h"
+  #include "codec/api/svc/codec_app_def.h"
+  #include "test/utils/BufferedData.h"
+  #include "test/utils/FileInputStream.h"
+}
+
 // Local include
 #include "CupModeling.hpp"
+uint8_t* pData[3];
 uint8_t *RGBFrame;
 uint8_t *DepthFrame;
 uint8_t *DepthIndex;
@@ -69,6 +80,11 @@ bool interactionActive;
 igtl::ConditionVariable::Pointer conditionVar;
 igtl::SimpleMutexLock * localMutex;
 int frameNum = 0;
+
+ISVCDecoder* decoderDepthFrame_;
+ISVCDecoder* decoderDepthIndex_;
+ISVCDecoder* decoderColor_;
+#define NO_DELAY_DECODING
 void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned char* bufColor, int depth_width_, int depth_height_) // now it is fixed to 512, 424
 {
   ;//(depth_width_*depth_height_,vtkVector<float, 3>());
@@ -145,42 +161,314 @@ void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned 
   }
 }
 
+int YUV420ToRGBConversion(uint8_t *RGBFrame, uint8_t * YUV420Frame, int iHeight, int iWidth)
+{
+  int componentLength = iHeight*iWidth;
+  const uint8_t *srcY = YUV420Frame;
+  const uint8_t *srcU = YUV420Frame + componentLength;
+  const uint8_t *srcV = srcY + componentLength + componentLength/4;
+  uint8_t * YUV444 = new uint8_t[componentLength * 3];
+  uint8_t *dstY = YUV444;
+  uint8_t *dstU = dstY + componentLength;
+  uint8_t *dstV = dstU + componentLength;
+  
+  memcpy(dstY, srcY, componentLength);
+  const int halfHeight = iHeight/2;
+  const int halfWidth = iWidth/2;
+  
+#pragma omp parallel for default(none) shared(dstV,dstU,srcV,srcU,iWidth)
+  for (int y = 0; y < halfHeight; y++) {
+    for (int x = 0; x < halfWidth; x++) {
+      dstU[2 * x + 2 * y*iWidth] = dstU[2 * x + 1 + 2 * y*iWidth] = srcU[x + y*iWidth/2];
+      dstV[2 * x + 2 * y*iWidth] = dstV[2 * x + 1 + 2 * y*iWidth] = srcV[x + y*iWidth/2];
+    }
+    memcpy(&dstU[(2 * y + 1)*iWidth], &dstU[(2 * y)*iWidth], iWidth);
+    memcpy(&dstV[(2 * y + 1)*iWidth], &dstV[(2 * y)*iWidth], iWidth);
+  }
+  
+  const int yOffset = 16;
+  const int cZero = 128;
+  int yMult, rvMult, guMult, gvMult, buMult;
+  yMult =   76309;
+  rvMult = 117489;
+  guMult = -13975;
+  gvMult = -34925;
+  buMult = 138438;
+  
+  static unsigned char clp_buf[384+256+384];
+  static unsigned char *clip_buf = clp_buf+384;
+  
+  // initialize clipping table
+  memset(clp_buf, 0, 384);
+  
+  for (int i = 0; i < 256; i++) {
+    clp_buf[384+i] = i;
+  }
+  memset(clp_buf+384+256, 255, 384);
+  
+  
+#pragma omp parallel for default(none) shared(dstY,dstU,dstV,RGBFrame,yMult,rvMult,guMult,gvMult,buMult,clip_buf,componentLength)// num_threads(2)
+  for (int i = 0; i < componentLength; ++i) {
+    const int Y_tmp = ((int)dstY[i] - yOffset) * yMult;
+    const int U_tmp = (int)dstU[i] - cZero;
+    const int V_tmp = (int)dstV[i] - cZero;
+    
+    const int R_tmp = (Y_tmp                  + V_tmp * rvMult ) >> 16;//32 to 16 bit conversion by left shifting
+    const int G_tmp = (Y_tmp + U_tmp * guMult + V_tmp * gvMult ) >> 16;
+    const int B_tmp = (Y_tmp + U_tmp * buMult                  ) >> 16;
+    
+    RGBFrame[3*i]   = clip_buf[R_tmp];
+    RGBFrame[3*i+1] = clip_buf[G_tmp];
+    RGBFrame[3*i+2] = clip_buf[B_tmp];
+  }
+  
+  delete [] YUV444;
+  YUV444 = NULL;
+  dstY = NULL;
+  dstU = NULL;
+  dstV = NULL;
+  return 1;
+}
+
+int64_t getTime()
+{
+  struct timeval tv_date;
+  gettimeofday(&tv_date, NULL);
+  return ((int64_t) tv_date.tv_sec * 1000000 + (int64_t) tv_date.tv_usec);
+  
+}
+
+void ComposeByteSteam(uint8_t** inputData, SBufferInfo bufInfo, uint8_t *outputByteStream,  int iWidth, int iHeight)
+{
+  int iStride [2] = {bufInfo.UsrData.sSystemBuffer.iStride[0],bufInfo.UsrData.sSystemBuffer.iStride[1]};
+#pragma omp parallel for default(none) shared(outputByteStream,inputData, iStride, iHeight, iWidth)
+  for (int i = 0; i < iHeight; i++)
+  {
+    uint8_t* pPtr = inputData[0]+i*iStride[0];
+    for (int j = 0; j < iWidth; j++)
+    {
+      outputByteStream[i*iWidth + j] = pPtr[j];
+    }
+  }
+#pragma omp parallel for default(none) shared(outputByteStream,inputData, iStride, iHeight, iWidth)
+  for (int i = 0; i < iHeight/2; i++)
+  {
+    uint8_t* pPtr = inputData[1]+i*iStride[1];
+    for (int j = 0; j < iWidth/2; j++)
+    {
+      outputByteStream[i*iWidth/2 + j + iHeight*iWidth] = pPtr[j];
+    }
+  }
+#pragma omp parallel for default(none) shared(outputByteStream, inputData, iStride, iHeight, iWidth)
+  for (int i = 0; i < iHeight/2; i++)
+  {
+    uint8_t* pPtr = inputData[2]+i*iStride[1];
+    for (int j = 0; j < iWidth/2; j++)
+    {
+      outputByteStream[i*iWidth/2 + j + iHeight*iWidth*5/4] = pPtr[j];
+    }
+  }
+  
+}
+
+void H264Decode (ISVCDecoder* pDecoder, unsigned char* kpH264BitStream, int32_t& iWidth, int32_t& iHeight, int32_t& iStreamSize, uint8_t* outputByteStream) {
+  
+  unsigned long long uiTimeStamp = 0;
+  int64_t iStart = 0, iEnd = 0, iTotal = 0;
+  int32_t iSliceSize;
+  int32_t iSliceIndex = 0;
+  uint8_t* pBuf = NULL;
+  uint8_t uiStartCode[4] = {0, 0, 0, 1};
+  
+  iStart = getTime();
+  pData[0] = NULL;
+  pData[1] = NULL;
+  pData[2] = NULL;
+  
+  SBufferInfo sDstBufInfo;
+  
+  int32_t iBufPos = 0;
+  int32_t i = 0;
+  int32_t iFrameCount = 0;
+  int32_t iEndOfStreamFlag = 0;
+  //for coverage test purpose
+  int32_t iErrorConMethod = (int32_t) ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE;
+  pDecoder->SetOption (DECODER_OPTION_ERROR_CON_IDC, &iErrorConMethod);
+  //~end for
+  double dElapsed = 0;
+  
+  if (pDecoder == NULL) return;
+  
+  if (iStreamSize <= 0) {
+    fprintf (stderr, "Current Bit Stream File is too small, read error!!!!\n");
+    goto label_exit;
+  }
+  pBuf = new uint8_t[iStreamSize + 4];
+  if (pBuf == NULL) {
+    fprintf (stderr, "new buffer failed!\n");
+    goto label_exit;
+  }
+  memcpy (pBuf, kpH264BitStream, iStreamSize);
+  memcpy (pBuf + iStreamSize, &uiStartCode[0], 4); //confirmed_safe_unsafe_usage
+  
+  while (true) {
+    if (iBufPos >= iStreamSize) {
+      iEndOfStreamFlag = true;
+      if (iEndOfStreamFlag)
+        pDecoder->SetOption (DECODER_OPTION_END_OF_STREAM, (void*)&iEndOfStreamFlag);
+      break;
+    }
+    for (i = 0; i < iStreamSize; i++) {
+      if ((pBuf[iBufPos + i] == 0 && pBuf[iBufPos + i + 1] == 0 && pBuf[iBufPos + i + 2] == 0 && pBuf[iBufPos + i + 3] == 1
+           && i > 0) || (pBuf[iBufPos + i] == 0 && pBuf[iBufPos + i + 1] == 0 && pBuf[iBufPos + i + 2] == 1 && i > 0)) {
+        break;
+      }
+    }
+    iSliceSize = i;
+    if (iSliceSize < 4) { //too small size, no effective data, ignore
+      iBufPos += iSliceSize;
+      continue;
+    }
+    
+    iStart = getTime();
+    delete [] pData[0];
+    pData[0] = NULL;
+    delete [] pData[1];
+    pData[1] = NULL;
+    delete [] pData[2];
+    pData[2] = NULL;
+    uiTimeStamp ++;
+    memset (&sDstBufInfo, 0, sizeof (SBufferInfo));
+    sDstBufInfo.uiInBsTimeStamp = uiTimeStamp;
+#ifndef NO_DELAY_DECODING
+    pDecoder->DecodeFrameNoDelay (pBuf + iBufPos, iSliceSize, pData, &sDstBufInfo);
+#else
+    pDecoder->DecodeFrame2 (pBuf + iBufPos, iSliceSize, pData, &sDstBufInfo);
+#endif
+    
+#ifdef NO_DELAY_DECODING
+    
+    pData[0] = NULL;
+    pData[1] = NULL;
+    pData[2] = NULL;
+    memset (&sDstBufInfo, 0, sizeof (SBufferInfo));
+    sDstBufInfo.uiInBsTimeStamp = uiTimeStamp;
+    pDecoder->DecodeFrame2 (NULL, 0, pData, &sDstBufInfo);
+    //fprintf (stderr, "iStreamSize:\t%d \t slice size:\t%d\n", iStreamSize, iSliceSize);
+    iEnd  = getTime();
+    iTotal = iEnd - iStart;
+    if (sDstBufInfo.iBufferStatus == 1) {
+      int64_t iStart2 = getTime();
+      ComposeByteSteam(pData, sDstBufInfo, outputByteStream, iWidth,iHeight);
+      
+      //fprintf (stderr, "compose time:\t%f\n", (getTime()-iStart2)/1e6);
+      ++ iFrameCount;
+    }
+#endif
+    if (iFrameCount)
+    {
+      dElapsed = iTotal / 1e6;
+      //fprintf (stderr, "-------------------------------------------------------\n");
+      //fprintf (stderr, "iWidth:\t\t%d\nheight:\t\t%d\nFrames:\t\t%d\ndecode time:\t%f sec\nFPS:\t\t%f fps\n",
+      //         iWidth, iHeight, iFrameCount, dElapsed, (iFrameCount * 1.0) / dElapsed);
+      //fprintf (stderr, "-------------------------------------------------------\n");
+    }
+    iBufPos += iSliceSize;
+    ++ iSliceIndex;
+  }
+  // coverity scan uninitial
+label_exit:
+  if (pBuf) {
+    delete[] pBuf;
+    pBuf = NULL;
+  }
+}
+
+int SetupDecoder()
+{
+  
+  SDecodingParam decParam;
+  memset (&decParam, 0, sizeof (SDecodingParam));
+  decParam.uiTargetDqLayer = UCHAR_MAX;
+  decParam.eEcActiveIdc = ERROR_CON_SLICE_COPY;
+  decParam.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  WelsCreateDecoder (&decoderDepthIndex_);
+  decoderDepthIndex_->Initialize (&decParam);
+  WelsCreateDecoder (&decoderDepthFrame_);
+  decoderDepthFrame_->Initialize (&decParam);
+  WelsCreateDecoder (&decoderColor_);
+  decoderColor_->Initialize (&decParam);
+  
+  return 1;
+}
 
 int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& header)
 {
-  std::cerr << "Receiving TRANSFORM data type. " << header->GetDeviceName()<< std::endl;
+  //std::cerr << "Receiving TRANSFORM data type. " << header->GetDeviceName()<< std::endl;
   
   // Create a message buffer to receive transform data
   igtl::VideoMessage::Pointer videoMessage = igtl::VideoMessage::New();
   videoMessage->SetMessageHeader(header);
   videoMessage->AllocatePack(header->GetBodySizeToRead());
   // Receive transform data from the socket
+  //igtl::TimeStamp::Pointer timer = igtl::TimeStamp::New();
+  //long timePre = timer->GetTimeStampInNanoseconds();
   int read = socket->Receive(videoMessage->GetPackBodyPointer(), videoMessage->GetPackBodySize());
   
   // Deserialize the transform data
   // If you want to skip CRC check, call Unpack() without argument.
   int c = videoMessage->Unpack();
   int32_t iWidth = 512, iHeight = 424;
+  int DemuxMethod = 2;
   if (read == videoMessage->GetPackBodySize() && igtl::MessageHeader::UNPACK_BODY && videoMessage->GetWidth() == 512 && videoMessage->GetHeight() == 424) // if CRC check is OK
   {
-    int streamLength = videoMessage->GetPackBodySize()- IGTL_VIDEO_HEADER_SIZE;
-    if(strcmp(header->GetDeviceName(), "DepthFrame") == 0)
+    if (DemuxMethod == 3)
     {
-      DepthFrame = NULL;
-      DepthFrame = new uint8_t[iHeight*iWidth];
-      memcpy(DepthFrame, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight);
+      int streamLength = videoMessage->GetPackBodySize()- IGTL_VIDEO_HEADER_SIZE;
+      if(strcmp(header->GetDeviceName(), "DepthFrame") == 0)
+      {
+        DepthFrame = NULL;
+        DepthFrame = new uint8_t[iHeight*iWidth*3/2];
+        //AVDecode(this->AVDecoderDepthIndex, videoMsg->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthFrame);
+        H264Decode(decoderDepthFrame_, videoMessage->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthFrame);
+      }
+      else if(strcmp(header->GetDeviceName(), "DepthIndex") == 0)
+      {
+        DepthIndex = NULL;
+        DepthIndex = new uint8_t[iHeight*iWidth*3/2];
+        //AVDecode(this->AVDecoderDepthFrame, videoMsg->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthIndex);
+        H264Decode(decoderDepthIndex_, videoMessage->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthIndex);
+      }
+      else if(strcmp(header->GetDeviceName(), "ColorFrame") == 0)
+      {
+        RGBFrame = NULL;
+        RGBFrame = new uint8_t[iHeight*iWidth*3];
+        uint8_t* YUV420Frame = new uint8_t[iHeight*iWidth*3/2];
+        //AVDecode(this->AVDecoderDepthColor, videoMsg->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, YUV420Frame);
+        H264Decode(decoderColor_, videoMessage->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, YUV420Frame);
+        bool bConverion = YUV420ToRGBConversion(RGBFrame, YUV420Frame, iHeight, iWidth);
+      }
     }
-    else if(strcmp(header->GetDeviceName(), "DepthIndex") == 0)
+    else if(DemuxMethod == 2)
     {
-      DepthIndex = NULL;
-      DepthIndex = new uint8_t[iHeight*iWidth];
-      memcpy(DepthIndex, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight);
-    }
-    else if(strcmp(header->GetDeviceName(), "ColorFrame") == 0)
-    {
-      RGBFrame = NULL;
-      RGBFrame = new uint8_t[iHeight*iWidth*3];
-      memcpy(RGBFrame, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight*3);
+      if(strcmp(header->GetDeviceName(), "DepthFrame") == 0)
+      {
+        DepthFrame = NULL;
+        DepthFrame = new uint8_t[iHeight*iWidth];
+        memcpy(DepthFrame, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight);
+      }
+      else if(strcmp(header->GetDeviceName(), "DepthIndex") == 0)
+      {
+        DepthIndex = NULL;
+        DepthIndex = new uint8_t[iHeight*iWidth];
+        memcpy(DepthIndex, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight);
+      }
+      else if(strcmp(header->GetDeviceName(), "ColorFrame") == 0)
+      {
+        RGBFrame = NULL;
+        RGBFrame = new uint8_t[iHeight*iWidth*3];
+        memcpy(RGBFrame, videoMessage->GetPackFragmentPointer(2), iWidth*iHeight*3);
+      }
     }
     return 1;
   }
@@ -190,7 +478,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.178.70";
+  char*  hostname = "10.22.178.166";
   int    port     = 18944;
   
   //------------------------------------------------------------
@@ -397,6 +685,7 @@ int main(int argc, char* argv[])
   vtkSmartPointer<customMouseInteractorStyle> style = vtkSmartPointer<customMouseInteractorStyle>::New();
   renderWindowInteractor->SetInteractorStyle( style );
   std::cout << "currentStyle class name: " << renderWindowInteractor->GetInteractorStyle()->GetClassName() << std::endl;
+  SetupDecoder();
   threadViewer->SpawnThread((igtl::ThreadFunctionType) &ConnectionThread, NULL);
   renderWindowInteractor->Start();
 

@@ -478,7 +478,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.178.166";
+  char*  hostname = "10.22.178.137";
   int    port     = 18944;
   
   //------------------------------------------------------------
@@ -614,9 +614,16 @@ public:
 };
 vtkStandardNewMacro(customMouseInteractorStyle);
 
+
+#include <pcl/filters/extract_indices.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/approximate_voxel_grid.h>
+
 int main(int argc, char* argv[])
 {
-  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/build/Debug/table_scene_mug_stereo_textured_cylinder_SingleFrame.pcd";
+  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/table_scene_mug_stereo_textured_Starbuck_Filtered.pcd";
   trackingInitialization(targetFileName);
   conditionVar = igtl::ConditionVariable::New();
   localMutex = igtl::SimpleMutexLock::New();
@@ -665,11 +672,10 @@ int main(int argc, char* argv[])
   polyData = vtkSmartPointer<vtkPolyData>::New();
   
   pcl::PCDReader reader;
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud (new pcl::PointCloud<pcl::PointXYZ>);
-  
+  pcl::PointCloud<PointT>::Ptr cloud (new pcl::PointCloud<PointT>);
   reader.read (targetFileName, *cloud);
   std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
-  pcl::io::pointCloudTovtkPolyData<pcl::PointXYZ>(*cloud, polyData.GetPointer());
+  pcl::io::pointCloudTovtkPolyData<PointT>(*cloud, polyData.GetPointer());
   mapper->SetInputData(polyData);
   // Render an image (lights and cameras are created automatically)
   renderWindow->SetSize(1000, 600);

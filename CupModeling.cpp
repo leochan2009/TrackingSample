@@ -31,15 +31,15 @@
 #include <pcl/point_types.h>
 #include <pcl/search/pcl_search.h>
 #include <pcl/common/transforms.h>
-#include <pcl/tracking/tracking.h>
-#include <pcl/tracking/particle_filter.h>
-#include <pcl/tracking/kld_adaptive_particle_filter_omp.h>
-#include <pcl/tracking/particle_filter_omp.h>
-#include <pcl/tracking/coherence.h>
-#include <pcl/tracking/distance_coherence.h>
-#include <pcl/tracking/hsv_color_coherence.h>
-#include <pcl/tracking/approx_nearest_pair_point_cloud_coherence.h>
-#include <pcl/tracking/nearest_pair_point_cloud_coherence.h>
+#include "tracking/tracking.h"
+#include "tracking/particle_filter.h"
+#include "tracking/kld_adaptive_particle_filter_omp.h"
+#include "tracking/particle_filter_omp.h"
+#include "tracking/coherence.h"
+#include "tracking/distance_coherence.h"
+#include "tracking/hsv_color_coherence.h"
+#include "tracking/approx_nearest_pair_point_cloud_coherence.h"
+#include "tracking/nearest_pair_point_cloud_coherence.h"
 
 pcl::PointCloud<PointT>::Ptr cloud_cylinder_total (new pcl::PointCloud<PointT> ());
 vtkSmartPointer<vtkVertexGlyphFilter> vertexFilter2(vtkSmartPointer<vtkVertexGlyphFilter>::New());
@@ -82,7 +82,7 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   // Build a passthrough filter to remove spurious NaNs
   pass.setInputCloud (cloud);
   pass.setFilterFieldName ("z");
-  pass.setFilterLimits (1350, 1550);
+  pass.setFilterLimits (1250, 1650);
   pass.setKeepOrganized (false);
   pass.filter (*cloud_filtered);
   
@@ -130,8 +130,8 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   seg.setMaxIterations (10000);
   seg.setDistanceThreshold (5);
   seg.setRadiusLimits (50, 100);
-  seg.setInputCloud (cloud_filtered);
-  seg.setInputNormals (cloud_normals);
+  seg.setInputCloud (cloud_filtered2);
+  seg.setInputNormals (cloud_normals2);
   
   // Obtain the cylinder inliers and coefficients
   seg.segment (*inliers_cylinder, *coefficients_cylinder);
@@ -162,7 +162,7 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   for(int index = 0; index<ptsLocal->GetNumberOfPoints();index++)
   {
     cloudProcessed->InsertNextPoint(ptsLocal->GetPoint(index)[0],ptsLocal->GetPoint(index)[1],ptsLocal->GetPoint(index)[2]);
-    unsigned char color[3] = {0,0,255};
+    unsigned char color[3] = {colorDataLocal->GetTuple(index)[0], colorDataLocal->GetTuple(index)[1], colorDataLocal->GetTuple(index)[2]};
     colorsProcessed->InsertNextTupleValue(color);
   }
   polyData->SetPoints(cloudProcessed);
@@ -179,12 +179,12 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
     if(frameNum<20 && frameNum>=19)
     {
       std::cerr << "Saving the data to the vector" << std::endl;
-      writer.write ("table_scene_mug_stereo_textured_cylinder_SingleFrame.pcd", *cloud_cylinder, false);
+      writer.write ("table_scene_mug_stereo_textured_Starbuck_SingleFrame.pcd", *cloud_cylinder, false);
     }
     else if(frameNum >=20 && frameNum<50)
     {
       std::cerr << "PointCloud representing the cylindrical component: " << cloud_cylinder->points.size () << " data points." << std::endl;
-      writer.write ("table_scene_mug_stereo_textured_cylinder.pcd", *cloud_cylinder_total, false);
+      writer.write ("table_scene_mug_stereo_Starbuck_cylinder.pcd", *cloud_cylinder_total, false);
     }
   }
 }
@@ -220,16 +220,16 @@ void trackingInitialization(const std::string targetFileName)
   (new pcl::tracking::KLDAdaptiveParticleFilterOMPTracker<RefPointType, ParticleT> (8));
   
   ParticleT bin_size;
-  bin_size.x = 100.0f;
-  bin_size.y = 100.0f;
-  bin_size.z = 100.0f;
+  bin_size.x = 10.0f;
+  bin_size.y = 10.0f;
+  bin_size.z = 10.0f;
   bin_size.roll = 0.1f;
   bin_size.pitch = 0.1f;
   bin_size.yaw = 0.1f;
   
   
   //Set all parameters for  KLDAdaptiveParticleFilterOMPTracker
-  tracker->setMaximumParticleNum (200);
+  tracker->setMaximumParticleNum (100);
   tracker->setDelta (0.99);
   tracker->setEpsilon (0.2);
   tracker->setBinSize (bin_size);
@@ -240,10 +240,12 @@ void trackingInitialization(const std::string targetFileName)
   tracker_->setStepNoiseCovariance (default_step_covariance);
   tracker_->setInitialNoiseCovariance (initial_noise_covariance);
   tracker_->setInitialNoiseMean (default_initial_mean);
-  tracker_->setIterationNum (10);
+  tracker_->setIterationNum (1);
   tracker_->setParticleNum (100);
-  tracker_->setResampleLikelihoodThr(0.2);
+  tracker_->setResampleLikelihoodThr(0.00);
+  tracker_->setMinIndices(500);
   tracker_->setUseNormal (false);
+  //tracker_->setMotionRatio(0.5);
   
   
   //Setup coherence object for tracking
@@ -252,11 +254,14 @@ void trackingInitialization(const std::string targetFileName)
   
   boost::shared_ptr<pcl::tracking::DistanceCoherence<RefPointType> > distance_coherence
   = boost::shared_ptr<pcl::tracking::DistanceCoherence<RefPointType> > (new pcl::tracking::DistanceCoherence<RefPointType> ());
+  boost::shared_ptr<pcl::tracking::HSVColorCoherence<RefPointType> > hsvColor_coherence
+  = boost::shared_ptr<pcl::tracking::HSVColorCoherence<RefPointType> > (new pcl::tracking::HSVColorCoherence<RefPointType> ());
   coherence->addPointCoherence (distance_coherence);
+  coherence->addPointCoherence (hsvColor_coherence);
   
   boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (2));
   coherence->setSearchMethod (search);
-  coherence->setMaximumDistance (20);
+  coherence->setMaximumDistance (10);
   
   tracker_->setCloudCoherence (coherence);
   
@@ -269,10 +274,10 @@ void trackingInitialization(const std::string targetFileName)
   pcl::compute3DCentroid<RefPointType> (*target_cloud, c);
   trans.translation ().matrix () = Eigen::Vector3f (c[0], c[1], c[2]);
   pcl::transformPointCloud<RefPointType> (*target_cloud, *transed_ref, trans.inverse());
-  //gridSampleApprox (transed_ref, *transed_ref_downsampled, downsampling_grid_size_);
+  gridSampleApprox (transed_ref, *transed_ref_downsampled, downsampling_grid_size_);
   
   //set reference model and trans
-  tracker_->setReferenceCloud (transed_ref);
+  tracker_->setReferenceCloud (transed_ref_downsampled);
   tracker_->setTrans (trans);
   
 }
@@ -282,7 +287,7 @@ void filterPassThrough (const CloudConstPtr &cloud, Cloud &result)
 {
   pcl::PassThrough<PointT> pass;
   pass.setFilterFieldName ("z");
-  pass.setFilterLimits (1200.0, 3800.0);
+  pass.setFilterLimits (500.0, 3800.0);
   pass.setKeepOrganized (false);
   pass.setInputCloud (cloud);
   pass.filter (result);
@@ -298,11 +303,12 @@ drawResult ()
   //move close to camera a little for better visualization
   //transformation.translation () += Eigen::Vector3f (0.0f, 0.0f, -0.005f);
   CloudPtr result_cloud (new Cloud ());
-  pcl::transformPointCloud<RefPointType> (*(tracker_->getReferenceCloud ()), *result_cloud, transformation);
+  ParticleFilter::PointCloudInConstPtr refCloud = tracker_->getReferenceCloud ();
+  pcl::transformPointCloud<RefPointType> (*(refCloud), *result_cloud, transformation);
   for(int index = 0; index<result_cloud->size();index++)
   {
     cloudProcessed->InsertNextPoint(result_cloud->at(index).data[0],result_cloud->at(index).data[1],result_cloud->at(index).data[2]);
-    unsigned char color[3] = {0,0,255};//result_cloud->at(index).r,result_cloud->at(index).g,result_cloud->at(index).b};
+    unsigned char color[3] = {refCloud->at(index).r,refCloud->at(index).g,refCloud->at(index).b};//result_cloud->at(index).r,result_cloud->at(index).g,result_cloud->at(index).b};
     colorsProcessed->InsertNextTupleValue(color);
   }
   

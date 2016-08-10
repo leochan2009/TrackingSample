@@ -130,7 +130,7 @@ void ConvertDepthToPoints(unsigned char* buf, unsigned char* bufIndex, unsigned 
       vtkVector<float, 3> pt;
       //This part is used for invalid measurements, I removed it
       int pixelValue = buf[depth_idx];
-      if((bufIndex[depth_idx] == 0) || (bufColor[3*depth_idx] == 0 && bufColor[3*depth_idx+1] == 0 && bufColor[3*depth_idx+2]==0) )
+      if((bufIndex[depth_idx] ==0) || (bufColor[3*depth_idx] == 0 && bufColor[3*depth_idx+1] == 0 && bufColor[3*depth_idx+2]==0) )
       {
         // not valid
         pt[0] = pt[1] = pt[2] = bad_point;
@@ -419,7 +419,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
   // If you want to skip CRC check, call Unpack() without argument.
   int c = videoMessage->Unpack();
   int32_t iWidth = 512, iHeight = 424;
-  int DemuxMethod = 2;
+  int DemuxMethod = 3;
   if (read == videoMessage->GetPackBodySize() && igtl::MessageHeader::UNPACK_BODY && videoMessage->GetWidth() == 512 && videoMessage->GetHeight() == 424) // if CRC check is OK
   {
     if (DemuxMethod == 3)
@@ -438,6 +438,10 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
         DepthIndex = new uint8_t[iHeight*iWidth*3/2];
         //AVDecode(this->AVDecoderDepthFrame, videoMsg->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthIndex);
         H264Decode(decoderDepthIndex_, videoMessage->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, DepthIndex);
+        for (int i = 0; i<iHeight*iWidth ; i++)
+        {
+          DepthIndex[i] = (DepthIndex[i]<=8) ? 0:std::round((DepthIndex[i]-16)/16 + 1);
+        }
       }
       else if(strcmp(header->GetDeviceName(), "ColorFrame") == 0)
       {
@@ -478,7 +482,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.178.137";
+  char*  hostname = "10.22.177.212";
   int    port     = 18944;
   
   //------------------------------------------------------------

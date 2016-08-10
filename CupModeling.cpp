@@ -213,7 +213,7 @@ void trackingInitialization(const std::string targetFileName)
   default_step_covariance[4] *= 40.0;
   default_step_covariance[5] *= 40.0;
   
-  std::vector<double> initial_noise_covariance = std::vector<double> (6, 0.01);
+  std::vector<double> initial_noise_covariance = std::vector<double> (6, 100);
   std::vector<double> default_initial_mean = std::vector<double> (6, 0.0);
   
   boost::shared_ptr<pcl::tracking::KLDAdaptiveParticleFilterOMPTracker<RefPointType, ParticleT> > tracker
@@ -257,7 +257,7 @@ void trackingInitialization(const std::string targetFileName)
   boost::shared_ptr<pcl::tracking::HSVColorCoherence<RefPointType> > hsvColor_coherence
   = boost::shared_ptr<pcl::tracking::HSVColorCoherence<RefPointType> > (new pcl::tracking::HSVColorCoherence<RefPointType> ());
   coherence->addPointCoherence (distance_coherence);
-  coherence->addPointCoherence (hsvColor_coherence);
+  //coherence->addPointCoherence (hsvColor_coherence);
   
   boost::shared_ptr<pcl::search::Octree<RefPointType> > search (new pcl::search::Octree<RefPointType> (2));
   coherence->setSearchMethod (search);

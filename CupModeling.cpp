@@ -9,6 +9,8 @@
 #include "CupModeling.hpp"
 #include <pcl/ModelCoefficients.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/io/ply_io.h>
+#include <pcl/conversions.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
@@ -199,11 +201,34 @@ void gridSampleApprox (const CloudConstPtr &cloud, Cloud &result, double leaf_si
 
 void trackingInitialization(const std::string targetFileName)
 {
-  pcl::PCDReader reader;
-  reader.read (targetFileName, *target_cloud);
-  std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
+  if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "ply",3)==0)
+  {
+    pcl::PLYReader reader;
+    reader.read (targetFileName, *target_cloud);
+    std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
+  }
+  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0)
+  {
+    pcl::PolygonMesh mesh;
+    pcl::io::loadPolygonFileSTL (targetFileName, mesh);
+    pcl::fromPCLPointCloud2(mesh.cloud, *target_cloud);
+    for (int i = 0;i<target_cloud->size(); i++)
+    {
+      target_cloud->at(i).data[2] += 1400;
+      target_cloud->at(i).data[1] -= 100;
+      target_cloud->at(i).r = 255;
+      target_cloud->at(i).g = 255;
+      target_cloud->at(i).b = 255;
+    }
+  }
+  else
+  {
+    pcl::PCDReader reader;
+    reader.read (targetFileName, *target_cloud);
+    std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
+  }
   //Set parameters
-  float downsampling_grid_size_ =  0.5;
+  float downsampling_grid_size_ =  2;
   
   std::vector<double> default_step_covariance = std::vector<double> (6, 0.015 * 0.015);
   default_step_covariance[0] *= 10000.0;

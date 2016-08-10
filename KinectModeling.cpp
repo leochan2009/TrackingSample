@@ -12,6 +12,7 @@
 #include <pcl/ModelCoefficients.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/vtk_lib_io.h>
+#include <pcl/io/ply_io.h>
 
 #include <iostream>
 #include <iomanip>
@@ -419,7 +420,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
   // If you want to skip CRC check, call Unpack() without argument.
   int c = videoMessage->Unpack();
   int32_t iWidth = 512, iHeight = 424;
-  int DemuxMethod = 3;
+  int DemuxMethod = 2;
   if (read == videoMessage->GetPackBodySize() && igtl::MessageHeader::UNPACK_BODY && videoMessage->GetWidth() == 512 && videoMessage->GetHeight() == 424) // if CRC check is OK
   {
     if (DemuxMethod == 3)
@@ -627,7 +628,7 @@ vtkStandardNewMacro(customMouseInteractorStyle);
 
 int main(int argc, char* argv[])
 {
-  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/table_scene_mug_stereo_textured_Starbuck_Filtered.pcd";
+  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/build/ProstateData/Transparent-1.STL";
   trackingInitialization(targetFileName);
   conditionVar = igtl::ConditionVariable::New();
   localMutex = igtl::SimpleMutexLock::New();
@@ -675,10 +676,33 @@ int main(int argc, char* argv[])
   cloud = vtkSmartPointer<vtkPoints>::New();
   polyData = vtkSmartPointer<vtkPolyData>::New();
   
-  pcl::PCDReader reader;
   pcl::PointCloud<PointT>::Ptr cloud (new pcl::PointCloud<PointT>);
-  reader.read (targetFileName, *cloud);
-  std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
+  if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "ply",3)==0)
+  {
+    pcl::PLYReader reader;
+    reader.read (targetFileName, *cloud);
+    std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
+  }
+  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0)
+  {
+    pcl::PolygonMesh mesh;
+    pcl::io::loadPolygonFileSTL (targetFileName, mesh);
+    pcl::fromPCLPointCloud2(mesh.cloud, *cloud);
+    for (int i = 0;i<cloud->size(); i++)
+    {
+      cloud->at(i).data[2] += 1500;
+      cloud->at(i).data[1] -= 200;
+      cloud->at(i).r = 255;
+      cloud->at(i).g = 255;
+      cloud->at(i).b = 255;
+    }
+  }
+  else
+  {
+    pcl::PCDReader reader;
+    reader.read (targetFileName, *cloud);
+    std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
+  }
   pcl::io::pointCloudTovtkPolyData<PointT>(*cloud, polyData.GetPointer());
   mapper->SetInputData(polyData);
   // Render an image (lights and cameras are created automatically)

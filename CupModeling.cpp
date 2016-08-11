@@ -155,12 +155,6 @@ void SegmentCylindarObject(vtkSmartPointer<vtkPolyData> polyData, int frameNum)
   colorsProcessed->Reset();
   colorsProcessed->SetNumberOfComponents(3);
   colorsProcessed->SetName("Colors");
-  /*for(int index = 0; index<pts->GetNumberOfPoints();index++)
-  {
-    cloudProcessed->InsertNextPoint(pts->GetPoint(index)[0],pts->GetPoint(index)[1],pts->GetPoint(index)[2]);
-    unsigned char color[3] = {colorData->GetTuple(index)[0], colorData->GetTuple(index)[1], colorData->GetTuple(index)[2]};
-    colorsProcessed->InsertNextTupleValue(color);
-  }*/
   for(int index = 0; index<ptsLocal->GetNumberOfPoints();index++)
   {
     cloudProcessed->InsertNextPoint(ptsLocal->GetPoint(index)[0],ptsLocal->GetPoint(index)[1],ptsLocal->GetPoint(index)[2]);
@@ -207,26 +201,36 @@ void trackingInitialization(const std::string targetFileName)
     reader.read (targetFileName, *target_cloud);
     std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
   }
-  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0)
+  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0||strncmp(&targetFileName.c_str()[targetFileName.size()-3], "stl",3)==0)
   {
     pcl::PolygonMesh mesh;
     pcl::io::loadPolygonFileSTL (targetFileName, mesh);
     pcl::fromPCLPointCloud2(mesh.cloud, *target_cloud);
-    for (int i = 0;i<target_cloud->size(); i++)
-    {
-      target_cloud->at(i).data[2] += 1400;
-      target_cloud->at(i).data[1] -= 100;
-      target_cloud->at(i).r = 255;
-      target_cloud->at(i).g = 255;
-      target_cloud->at(i).b = 255;
-    }
   }
   else
   {
     pcl::PCDReader reader;
     reader.read (targetFileName, *target_cloud);
-    std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
   }
+  Eigen::Vector4f center;
+  pcl::compute3DCentroid<RefPointType> (*target_cloud, center);
+  pcl::PointCloud<PointT>::Ptr target_cloud_half (new pcl::PointCloud<PointT>);
+  for (int i = 0;i<target_cloud->size(); i++)
+  {
+    if(target_cloud->at(i).data[2] < center[2])
+    {
+      target_cloud_half->push_back(target_cloud->at(i));
+    }
+    target_cloud->at(i).data[2] = target_cloud->at(i).data[2] - center[2] + 1400;
+    target_cloud->at(i).data[1] = target_cloud->at(i).data[1] - center[1];
+    target_cloud->at(i).data[0] = target_cloud->at(i).data[0] - center[0];
+    target_cloud->at(i).r = 255;
+    target_cloud->at(i).g = 255;
+    target_cloud->at(i).b = 255;
+  }
+  //pcl::PCDWriter writer;
+  //writer.write("/Users/longquanchen/Desktop/Github/TrackingSample/build/Head/SkinRotatedHalf.pcd",*target_cloud_half);
+  std::cerr << "PointCloud has: " << target_cloud->points.size () << " data points." << std::endl;
   //Set parameters
   float downsampling_grid_size_ =  2;
   

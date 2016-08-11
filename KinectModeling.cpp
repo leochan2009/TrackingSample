@@ -451,6 +451,13 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
         uint8_t* YUV420Frame = new uint8_t[iHeight*iWidth*3/2];
         //AVDecode(this->AVDecoderDepthColor, videoMsg->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, YUV420Frame);
         H264Decode(decoderColor_, videoMessage->GetPackFragmentPointer(2), iWidth, iHeight, streamLength, YUV420Frame);
+        std::string outname = "x264TestFrame.264";
+        FILE* pf = fopen(outname.c_str(), "a");
+        int temp;
+        for (int r=0; r<streamLength; r++){
+          temp = fputc(*(videoMessage->GetPackFragmentPointer(2)+r), pf);
+        }
+        fclose(pf);
         bool bConverion = YUV420ToRGBConversion(RGBFrame, YUV420Frame, iHeight, iWidth);
       }
     }
@@ -483,7 +490,7 @@ int ReceiveVideoStream(igtl::Socket * socket, igtl::MessageHeader::Pointer& head
 
 void ConnectionThread()
 {
-  char*  hostname = "10.22.177.212";
+  char*  hostname = "10.22.179.33";
   int    port     = 18944;
   
   //------------------------------------------------------------
@@ -628,7 +635,7 @@ vtkStandardNewMacro(customMouseInteractorStyle);
 
 int main(int argc, char* argv[])
 {
-  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/build/ProstateData/Transparent-1.STL";
+  const std::string targetFileName = "/Users/longquanchen/Desktop/Github/TrackingSample/build/Head/SkinRotatedHalf.pcd";
   trackingInitialization(targetFileName);
   conditionVar = igtl::ConditionVariable::New();
   localMutex = igtl::SimpleMutexLock::New();
@@ -683,7 +690,7 @@ int main(int argc, char* argv[])
     reader.read (targetFileName, *cloud);
     std::cerr << "PointCloud has: " << cloud->points.size () << " data points." << std::endl;
   }
-  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0)
+  else if(strncmp(&targetFileName.c_str()[targetFileName.size()-3], "STL",3)==0||strncmp(&targetFileName.c_str()[targetFileName.size()-3], "stl",3)==0)
   {
     pcl::PolygonMesh mesh;
     pcl::io::loadPolygonFileSTL (targetFileName, mesh);
